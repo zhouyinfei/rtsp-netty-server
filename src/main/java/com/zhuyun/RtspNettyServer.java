@@ -22,6 +22,8 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.Properties;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import com.zhuyun.handler.HeartBeatServerHandler;
@@ -39,6 +41,8 @@ public class RtspNettyServer {
     public static Channel rtpChannel;
     public static Channel rtcpChannel;
     public static int ALL_IDLE_TIME;						//读和写的超时时间
+    public static ExecutorService EXECUTOR;					//处理的线程池
+    public static int WORKER_GROUP;							//worker的线程数
     
     public static int rtpPort = 54000;
     public static int rtspPort = 554;
@@ -95,6 +99,8 @@ public class RtspNettyServer {
 			rtspPort = Integer.parseInt(properties.getProperty("rtsp.port"));
 			outputPath = properties.getProperty("output.path");
 			ALL_IDLE_TIME = Integer.parseInt(properties.getProperty("all.idle.time"));
+			EXECUTOR = Executors.newFixedThreadPool(Integer.parseInt(properties.getProperty("executor.threadpool")));
+			WORKER_GROUP = Integer.parseInt(properties.getProperty("worker.group"));
 		} catch (NumberFormatException | IOException e1) {
 			e1.printStackTrace();
 		}
@@ -102,7 +108,7 @@ public class RtspNettyServer {
         ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.ADVANCED);
 
         EventLoopGroup listenGrp = new NioEventLoopGroup(1);
-        EventLoopGroup workGrp = new NioEventLoopGroup(4);
+        EventLoopGroup workGrp = new NioEventLoopGroup(WORKER_GROUP);
         initUdp(workGrp);
         createUdp(rtpPort);
 

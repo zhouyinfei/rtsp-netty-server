@@ -27,7 +27,6 @@ import com.zhuyun.streamhub.StreamHub;
 
 public class HttpFlvHandler extends SimpleChannelInboundHandler<FullHttpRequest> implements StreamFrameSink
 {
-    protected String keyhash = "";
     protected Channel chn;
 
     @Override
@@ -43,42 +42,42 @@ public class HttpFlvHandler extends SimpleChannelInboundHandler<FullHttpRequest>
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest o) throws Exception
     {
-        if (!o.decoderResult().isSuccess())
-        {
-            sendError(ctx, HttpResponseStatus.BAD_REQUEST);
-            return;
-        }
-        if (o.method() != HttpMethod.GET)
-        {
-            sendError(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED);
-            return;
-        }
-
-        QueryStringDecoder uri = new QueryStringDecoder(o.uri());
-        System.out.println(uri.path());
-        if (!uri.path().equals("/live/liveflv") || !uri.parameters().containsKey("keyhash"))
-        {
-            sendError(ctx, HttpResponseStatus.BAD_REQUEST);
-            return;
-        }
-        keyhash = uri.parameters().get("keyhash").get(0);
-        if (StringUtil.isNullOrEmpty(keyhash))
-        {
-            sendError(ctx, HttpResponseStatus.BAD_REQUEST);
-            return;
-        }
-
-        HttpResponse rsp = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-
-        rsp.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE)
-                .set(HttpHeaderNames.CONTENT_TYPE, "video/x-flv")
-                //.set(HttpHeaderNames.CONTENT_TYPE, "text/plain")
-                .set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED)
-                .set(HttpHeaderNames.SERVER, "wangxiaohui");
-
-        ctx.writeAndFlush(rsp);
-        StreamHub.EnterStream(keyhash, this);
-        System.out.printf("%s enter stream %s from http\n", chn.id(), keyhash);
+//        if (!o.decoderResult().isSuccess())
+//        {
+//            sendError(ctx, HttpResponseStatus.BAD_REQUEST);
+//            return;
+//        }
+//        if (o.method() != HttpMethod.GET)
+//        {
+//            sendError(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED);
+//            return;
+//        }
+//
+//        QueryStringDecoder uri = new QueryStringDecoder(o.uri());
+//        System.out.println(uri.path());
+//        if (!uri.path().equals("/live/liveflv") || !uri.parameters().containsKey("keyhash"))
+//        {
+//            sendError(ctx, HttpResponseStatus.BAD_REQUEST);
+//            return;
+//        }
+//        keyhash = uri.parameters().get("keyhash").get(0);
+//        if (StringUtil.isNullOrEmpty(keyhash))
+//        {
+//            sendError(ctx, HttpResponseStatus.BAD_REQUEST);
+//            return;
+//        }
+//
+//        HttpResponse rsp = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+//
+//        rsp.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE)
+//                .set(HttpHeaderNames.CONTENT_TYPE, "video/x-flv")
+//                //.set(HttpHeaderNames.CONTENT_TYPE, "text/plain")
+//                .set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED)
+//                .set(HttpHeaderNames.SERVER, "wangxiaohui");
+//
+//        ctx.writeAndFlush(rsp);
+//        StreamHub.EnterStream(keyhash, this);
+//        System.out.printf("%s enter stream %s from http\n", chn.id(), keyhash);
     }
 
     @Override
@@ -93,16 +92,16 @@ public class HttpFlvHandler extends SimpleChannelInboundHandler<FullHttpRequest>
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception
     {
-        super.channelInactive(ctx);
-        System.out.printf("%s i am dead\n", ctx.channel().id());
-        
-        if (!StringUtil.isNullOrEmpty(keyhash))
-        {
-            // from stream hub clear this info
-            System.out.printf("%s will leave stream %s \n", chn.id(), keyhash);
-            StreamHub.LeaveStream(keyhash, this);
-            keyhash = "";
-        }
+//        super.channelInactive(ctx);
+//        System.out.printf("%s i am dead\n", ctx.channel().id());
+//        
+//        if (!StringUtil.isNullOrEmpty(keyhash))
+//        {
+//            // from stream hub clear this info
+//            System.out.printf("%s will leave stream %s \n", chn.id(), keyhash);
+//            StreamHub.LeaveStream(keyhash, this);
+//            keyhash = "";
+//        }
     }
 
     @Override
@@ -113,15 +112,15 @@ public class HttpFlvHandler extends SimpleChannelInboundHandler<FullHttpRequest>
         ctx.channel().close();
     }
 
-    private static void sendError(ChannelHandlerContext ctx, HttpResponseStatus status)
-    {
-        FullHttpResponse response = new DefaultFullHttpResponse(
-                HttpVersion.HTTP_1_1, status, Unpooled.copiedBuffer("Failure: " + status + "\r\n", CharsetUtil.UTF_8));
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
-
-        // Close the connection as soon as the error message is sent.
-        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
-    }
+//    private static void sendError(ChannelHandlerContext ctx, HttpResponseStatus status)
+//    {
+//        FullHttpResponse response = new DefaultFullHttpResponse(
+//                HttpVersion.HTTP_1_1, status, Unpooled.copiedBuffer("Failure: " + status + "\r\n", CharsetUtil.UTF_8));
+//        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
+//
+//        // Close the connection as soon as the error message is sent.
+//        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+//    }
 
     @Override
     public boolean writeFrame(StreamFrame frame)
