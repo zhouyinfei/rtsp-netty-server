@@ -2,8 +2,10 @@ package com.zhuyun.handler;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
@@ -27,9 +29,12 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang.math.RandomUtils;
@@ -37,14 +42,14 @@ import org.jitsi.service.neomedia.RawPacket;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.alibaba.fastjson.JSONObject;
 import com.zhuyun.RtspNettyServer;
 import com.zhuyun.media.MediaSdpInfo;
 import com.zhuyun.rtp.RtpUtils;
-import com.zhuyun.session.SessionFactory;
-import com.zhuyun.streamhub.StreamHub;
+import com.zhuyun.utils.HttpConnection;
 import com.zhuyun.utils.SdpParser;
 
-public class RtspHandler extends HttpFlvHandler
+public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 {
 	public static final Logger log = LoggerFactory.getLogger(RtspHandler.class); 
     private int remoteVideoRtpPort = 0;						//客户端Video的RTP端口
@@ -62,27 +67,73 @@ public class RtspHandler extends HttpFlvHandler
     private int fps = 25;								//默认帧率
     private String media = "h265";						//默认媒体类型
     private Map<String, MediaSdpInfo> mediaSdpInfoMap = null;
-    protected String keyhash = "";
+    private String keyhash = "";
+    private Channel chn;								//RTSP channel
+//    private ArrayBlockingQueue<byte[]> rtpQueue;			//存放音视频数据的阻塞队列
+    private ArrayBlockingQueue<String> rtcpQueue;			//存放rtcp的阻塞队列
 
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception
+    {
+        chn = ctx.channel();
+        System.out.printf("%s new connection %s\n", chn.id(), Thread.currentThread().getName());
+//        rtpQueue = new ArrayBlockingQueue<byte[]>(1000);
+        rtcpQueue = new ArrayBlockingQueue<String>(100);
+        
+        //根据rtcp消息作为心跳，一段时间内未收到rtcp包，则关闭rtsp连接，并停止发送音视频数据。
+//        RtspNettyServer.EXECUTOR.execute(new Runnable() {
+//			@Override
+//			public void run() {
+//				try {
+//					while (true) {
+//						String poll = rtcpQueue.poll(RtspNettyServer.RTCP_IDLE_TIME, TimeUnit.SECONDS);
+//						if (poll == null) {
+//							closeThisClient();
+//							break;
+//						}
+//					}
+//				} catch (InterruptedException e) {
+//					e.printStackTrace();
+//				}
+//			}
+//		});
+        
+    }
+    
+    public void closeThisClient()
+    {
+        if (this.chn.isActive())
+        {
+            System.out.println("i kill myself");
+            this.chn.close();
+        }
+    }
+    
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception
+    {
+        System.out.println("exception caught");
+        cause.printStackTrace();
+        ctx.channel().close();
+    }
+    
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception
     {
-//        super.channelInactive(ctx);
+        super.channelInactive(ctx);
         System.out.printf("%s i am dead\n", ctx.channel().id());
         
         if (!StringUtil.isNullOrEmpty(keyhash))
         {
             // from stream hub clear this info
             System.out.printf("%s will leave stream %s \n", chn.id(), keyhash);
-            StreamHub.LeaveStream(keyhash, this);
             keyhash = "";
         }
     
         System.out.println("close rtp rtcp channel "  + ctx.channel().id().asShortText());
-        
-        if (session != null) {
-        	SessionFactory.removeSession(session);
-		}
+//        RtpHandler.rtpMap.remove(String.valueOf(videoSsrc));
+//        RtpHandler.rtpMap.remove(String.valueOf(audioSsrc));
+//        RtcpHandler.rtcpMap.remove(String.valueOf(videoSsrc));
         
         isRtspAlive = 0;
     }
@@ -131,6 +182,7 @@ public class RtspHandler extends HttpFlvHandler
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest r) throws Exception
     {
+    	FullHttpResponse o = new DefaultFullHttpResponse(RtspVersions.RTSP_1_0, RtspResponseStatuses.OK);
         if (!r.decoderResult().isSuccess())
         {
             System.out.println("decode error");
@@ -140,17 +192,17 @@ public class RtspHandler extends HttpFlvHandler
         if (false == checkUrl(r))
         {
             System.out.println("check url error");
+            o.setStatus(RtspResponseStatuses.PARAMETER_NOT_UNDERSTOOD);	//Parameter Not Understood,参数无效
+            sendAnswer(ctx, r, o);
             closeThisClient();
             return;
         }
 
-        FullHttpResponse o = new DefaultFullHttpResponse(RtspVersions.RTSP_1_0, RtspResponseStatuses.OK);
-        if (r.method() == RtspMethods.OPTIONS)
-        {
+        if (r.method() == RtspMethods.OPTIONS) {
         	System.out.println("options");
             o.headers().add(RtspHeaderValues.PUBLIC, "DESCRIBE, SETUP, PLAY, TEARDOWN, ANNOUNCE, RECORD");
-        } else if (r.method() == RtspMethods.DESCRIBE)
-        {
+        } else if (r.method() == RtspMethods.DESCRIBE) {
+        	System.out.println("describe");
             InetSocketAddress addr = (InetSocketAddress) ctx.channel().localAddress();
             
             //默认是H265
@@ -174,10 +226,9 @@ public class RtspHandler extends HttpFlvHandler
             o.headers().add(RtspHeaderNames.CONTENT_TYPE, "application/sdp");
             o.content().writeCharSequence(sdp, CharsetUtil.UTF_8);
             o.headers().add(RtspHeaderNames.CONTENT_LENGTH, o.content().writerIndex());
-
-        } else if (r.method() == RtspMethods.SETUP)
-        {
-            System.out.println(r.headers().get(RtspHeaderNames.TRANSPORT));
+        } else if (r.method() == RtspMethods.SETUP) {
+        	System.out.println("setup");
+        	
             String transport = r.headers().get(RtspHeaderNames.TRANSPORT);
             transport = transport.toLowerCase();
             
@@ -197,9 +248,15 @@ public class RtspHandler extends HttpFlvHandler
                     		remoteVideoRtpPort = Integer.parseInt(strclientport[1]);
                     		remoteVideoRtcpPort = Integer.parseInt(strclientport[2]);
                             strremoteip = ((InetSocketAddress) ctx.channel().remoteAddress()).getHostString();
-                            videoSsrc = RandomUtils.nextInt();		
-                            System.out.println("videoSsrc=" + videoSsrc);
                             
+                            videoSsrc = RandomUtils.nextInt();
+//                            //如果在ssrcMap中已存在该ssrc，则重新生成
+//                            if (RtpHandler.rtpMap.containsKey(String.valueOf(videoSsrc))) {		
+//                            	videoSsrc = RandomUtils.nextInt();			
+//							}
+//   						 	RtpHandler.rtpMap.put(String.valueOf(videoSsrc), rtpQueue);
+//                            RtcpHandler.rtcpMap.put(String.valueOf(videoSsrc), rtcpQueue);
+                            System.out.println("videoSsrc=" + videoSsrc);
 
                             if (null == dstVideoAddr)
                             {
@@ -215,7 +272,13 @@ public class RtspHandler extends HttpFlvHandler
 							remoteAudioRtpPort = Integer.parseInt(strclientport[1]);
 							remoteAudioRtcpPort = Integer.parseInt(strclientport[2]);
                             strremoteip = ((InetSocketAddress) ctx.channel().remoteAddress()).getHostString();
+                            
                             audioSsrc = RandomUtils.nextInt();		
+//                            //如果在ssrcMap中已存在该ssrc，则重新生成
+//                            if (RtpHandler.rtpMap.containsKey(String.valueOf(audioSsrc))) {		
+//                            	audioSsrc = RandomUtils.nextInt();			
+//							}
+//   						 	RtpHandler.rtpMap.put(String.valueOf(audioSsrc), rtpQueue);
                             System.out.println("audioSsrc=" + audioSsrc);
 
                             if (null == dstAudioAddr)
@@ -227,56 +290,108 @@ public class RtspHandler extends HttpFlvHandler
 						}
                     }
                 }
-
                 
             } else{
                 System.out.println("error transport exit");
+                o.setStatus(RtspResponseStatuses.UNSUPPORTED_TRANSPORT);	//不支持的transport
+                sendAnswer(ctx, r, o);
                 closeThisClient();
                 return;
             }
 
             session = r.headers().get(RtspHeaderNames.SESSION);
-            if (session == null)			//只有请求中没有session时才创建
+            if (session == null)			//如果为空，则将channel id返回
             {
-            	session = SessionFactory.createSession();
-                while (SessionFactory.getSession(session) != null) {	//防止重复
-                	session = SessionFactory.createSession();
-    			}
-                SessionFactory.putSession(session, keyhash);
-                o.headers().add(RtspHeaderNames.SESSION, session);
-            }
-            
-            System.out.println("setup over");
+            	session = chn.id().toString();
+            	o.headers().add(RtspHeaderNames.SESSION, session);
+            } 
+            else {						//如果不为空，则判断是否等于当前channel id
+				if (!session.equals(chn.id().toString())) {	//如果不等于当前channel id，则关闭连接
+					o.setStatus(RtspResponseStatuses.SESSION_NOT_FOUND);	//Session未找到
+	                sendAnswer(ctx, r, o);
+					closeThisClient();
+	                return;
+				}
+			}
 
-        } else if (r.method() == RtspMethods.PLAY)
-        {
+        } else if (r.method() == RtspMethods.PLAY) {
             // send rtp and rtcp to client
             System.out.println("play");
             
             //校验session是否存在
             session = r.headers().get(RtspHeaderNames.SESSION);
-            keyhash = SessionFactory.getSession(session);
-            if (keyhash == null) {						
-            	System.out.println("rtspSession is null.");
-            	o = new DefaultFullHttpResponse(RtspVersions.RTSP_1_0, RtspResponseStatuses.BAD_REQUEST);
+            if (session == null || !session.equals(chn.id().toString())) {						
+            	o.setStatus(RtspResponseStatuses.SESSION_NOT_FOUND);	//Session未找到
+                sendAnswer(ctx, r, o);
+				closeThisClient();
+                return;
 			} else {
-				StreamHub.EnterStream(keyhash, this);
+	            ///////////用户、设备鉴权/////////////
+	            String tenantId = null;
+	            String token = null;
+	            String mediaName = null;
+	            
+	            QueryStringDecoder uri = new QueryStringDecoder(r.uri());
+	            //参数检测
+	            if (uri.parameters().get("tenantId") == null || 
+	            			uri.parameters().get("token") == null ||
+	            			uri.parameters().get("mediaName") == null) {
+	            		o.setStatus(RtspResponseStatuses.PARAMETER_NOT_UNDERSTOOD);	//参数无效
+	            		sendAnswer(ctx, r, o);
+	            		closeThisClient();
+	            		return;
+	    		}
+	            
+	            tenantId = uri.parameters().get("tenantId").get(0);
+	            token = uri.parameters().get("token").get(0);
+	            mediaName = uri.parameters().get("mediaName").get(0);
+	            
+	            //newton鉴权
+//	            String url = RtspNettyServer.NEWTON_URL + "getPayInfoIsExpire?keyhash=" + keyhash
+//	            			+ "&tenantId=" + tenantId + "&token=" + token 
+//	            			+ "&chargeMark=3&version=1.0";
+//	            String result = HttpConnection.get(url);
+	            String result = "{\"retcode\": \"200\"}";
+	            JSONObject jsonObject = JSONObject.parseObject(result);
+	            if (jsonObject == null) {							//连接newtonWeb失败
+	            	o.setStatus(RtspResponseStatuses.BAD_REQUEST);	//请求失败
+	            	o.content().writeCharSequence("{\"retcode\": \"215\"}", CharsetUtil.UTF_8);
+	                sendAnswer(ctx, r, o);
+	                closeThisClient();
+	                return;
+				}
+	            String retcode = jsonObject.getString("retcode");
+	            if (!"200".equals(retcode)) {				//如果返回码不是200，则直接返回newton的错误码，关闭连接
+	            	o.setStatus(RtspResponseStatuses.BAD_REQUEST);	//请求失败
+	            	o.content().writeCharSequence(jsonObject.toString(), CharsetUtil.UTF_8);
+	                sendAnswer(ctx, r, o);
+	                closeThisClient();
+	                return;
+				}
+	            ///////////////////////////////
+				
+				//根据文件名获取路径信息
+				SimpleDateFormat formatter= new SimpleDateFormat("yyyyMMdd");
+				Date date = new Date(Long.parseLong(mediaName)*1000);
+				String today = formatter.format(date);
 				
 				if ("h264".equals(media)) {
 					//播放h264视频文件、aac音频文件
-					String videoFilename = RtspNettyServer.outputPath + keyhash + ".h264";
+					String videoFilename = RtspNettyServer.outputPath + keyhash  + "/" + today + "/" + mediaName + ".h264";
 					File videoFile = new File(videoFilename);
 			        if (!videoFile.exists()) {
-			        	o = new DefaultFullHttpResponse(RtspVersions.RTSP_1_0, RtspResponseStatuses.BAD_REQUEST);
+			        	o.setStatus(RtspResponseStatuses.NOT_FOUND);	//文件不存在
 			        	sendAnswer(ctx, r, o);
+			        	closeThisClient();
 			            throw new FileNotFoundException(videoFilename);
 			        }
 			        
-			        String audioFilename = RtspNettyServer.outputPath + keyhash + ".aac";
+			        String audioFilename = RtspNettyServer.outputPath + keyhash  + "/" + today + "/" + mediaName + ".aac";
 			        File audioFile = new File(audioFilename);
 			        if (!audioFile.exists()) {
-			        	o = new DefaultFullHttpResponse(RtspVersions.RTSP_1_0, RtspResponseStatuses.BAD_REQUEST);
+			        	o.setStatus(RtspResponseStatuses.NOT_FOUND);	//文件不存在
 			        	sendAnswer(ctx, r, o);
+			        	closeThisClient();
 			            throw new FileNotFoundException(audioFilename);
 			        }
 			 
@@ -287,57 +402,68 @@ public class RtspHandler extends HttpFlvHandler
 							playH264(videoFile);
 						}
 					});
-			        playAac(audioFile);
+			        RtspNettyServer.EXECUTOR.execute(new Runnable() {
+						@Override
+						public void run() {
+							playAac(audioFile);
+						}
+					});
 					return;
 				} else if ("h265".equals(media)) {
 					//播放h265视频文件、aac音频文件
-					String videoFilename = RtspNettyServer.outputPath + keyhash + ".h265";
+					String videoFilename = RtspNettyServer.outputPath + keyhash  + "/" + today + "/" + mediaName + ".h265";;
 					File videoFile = new File(videoFilename);
 			        if (!videoFile.exists()) {
-			        	o = new DefaultFullHttpResponse(RtspVersions.RTSP_1_0, RtspResponseStatuses.BAD_REQUEST);
+			        	o.setStatus(RtspResponseStatuses.NOT_FOUND);
 			        	sendAnswer(ctx, r, o);
+			        	closeThisClient();
 			            throw new FileNotFoundException(videoFilename);
 			        }
 			        
-			        String audioFilename = RtspNettyServer.outputPath + keyhash + ".aac";
+			        String audioFilename = RtspNettyServer.outputPath + keyhash  + "/" + today + "/" + mediaName + ".aac";
 			        File audioFile = new File(audioFilename);
 			        if (!audioFile.exists()) {
-			        	o = new DefaultFullHttpResponse(RtspVersions.RTSP_1_0, RtspResponseStatuses.BAD_REQUEST);
+			        	o.setStatus(RtspResponseStatuses.NOT_FOUND);
 			        	sendAnswer(ctx, r, o);
+			        	closeThisClient();
 			            throw new FileNotFoundException(audioFilename);
 			        }
-			        sendAnswer(ctx, r, o);
 			        
+			        sendAnswer(ctx, r, o);
 			        RtspNettyServer.EXECUTOR.execute(new Runnable() {
 						@Override
 						public void run() {
 							playH265(videoFile);
 						}
 					});
-			        playAac(audioFile);
+			        RtspNettyServer.EXECUTOR.execute(new Runnable() {
+						@Override
+						public void run() {
+							playAac(audioFile);
+						}
+					});
 					return;
 				}
 				
 			}
 
-        } else if (r.method() == RtspMethods.TEARDOWN)
-        {
+        } else if (r.method() == RtspMethods.TEARDOWN) {
             System.out.println("teardown");
             
             //校验session是否存在
             session = r.headers().get(RtspHeaderNames.SESSION);
-            keyhash = SessionFactory.getSession(session);
-            if (keyhash == null) {						
-            	System.out.println("rtspSession is null.");
-            	o = new DefaultFullHttpResponse(RtspVersions.RTSP_1_0, RtspResponseStatuses.BAD_REQUEST);
+            if (session == null || !session.equals(chn.id().toString())) {						
+            	System.out.println("rtspSession is null or invalid.");
+            	o.setStatus(RtspResponseStatuses.SESSION_NOT_FOUND);	//Session未找到
+                sendAnswer(ctx, r, o);
+				closeThisClient();
+                return;
 			} else {
-	            o.headers().add("filename", keyhash + ".264");
 				sendAnswer(ctx, r, o);
 				closeThisClient();
 				return;
 			}
-        }  else if (r.method() == RtspMethods.ANNOUNCE)
-        {
+        }  else if (r.method() == RtspMethods.ANNOUNCE) {
             System.out.println("announce");
             
             ByteBuf content = r.content();
@@ -345,21 +471,68 @@ public class RtspHandler extends HttpFlvHandler
         	content.readBytes(sdp);
         	
         	mediaSdpInfoMap = SdpParser.parse(new String(sdp));	//解析出音视频相关参数
-        } else if (r.method() == RtspMethods.RECORD)
-        {
+        	if (mediaSdpInfoMap == null || mediaSdpInfoMap.size() == 0 || 
+        			((mediaSdpInfoMap != null && mediaSdpInfoMap.containsKey("video") 
+                		&& !mediaSdpInfoMap.get("video").getCodec().equals("H264")) 
+                		&& !mediaSdpInfoMap.get("video").getCodec().equals("H265")) ||
+                	((mediaSdpInfoMap != null && mediaSdpInfoMap.containsKey("audio") 
+                		&& !mediaSdpInfoMap.get("audio").getCodec().equals("MPEG4-GENERIC")))) {
+        		o.setStatus(RtspResponseStatuses.UNSUPPORTED_MEDIA_TYPE);	//不支持的媒体类型
+                sendAnswer(ctx, r, o);
+                closeThisClient();
+                return;
+			}
+        } else if (r.method() == RtspMethods.RECORD) {
             System.out.println("record");
             
             //校验session是否存在
             session = r.headers().get(RtspHeaderNames.SESSION);
-            keyhash = SessionFactory.getSession(session);
-            if (keyhash == null) {						
-            	System.out.println("rtspSession is null.");
-            	o = new DefaultFullHttpResponse(RtspVersions.RTSP_1_0, RtspResponseStatuses.BAD_REQUEST);
+            if (session == null || !session.equals(chn.id().toString())) {						
+            	System.out.println("rtspSession is null or invalid.");
+            	o.setStatus(RtspResponseStatuses.SESSION_NOT_FOUND);	//Session未找到
+                sendAnswer(ctx, r, o);
+				closeThisClient();
+                return;
 			} else {
-				o.headers().add("Server", "RtspServer");
+				///////////设备鉴权/////////////
+	            String content = null;			//keyhash+aeskey拼接后的字符串，再进行MD5运算后的值。
+	            QueryStringDecoder uri = new QueryStringDecoder(r.uri());
+	            if (uri.parameters().get("content") == null) {		//content不能为空，否则报错
+	            	 o.setStatus(RtspResponseStatuses.PARAMETER_NOT_UNDERSTOOD);	//参数无效
+	                 sendAnswer(ctx, r, o);
+	                 closeThisClient();
+	                 return;
+				} else {
+	            	content = uri.parameters().get("content").get(0);
+	    		}
+	            
+//	            String url = RtspNettyServer.NEWTON_URL + "getPayInfoIsExpire2?keyhash=" + keyhash 
+//            			+ "&content=" + content + "&chargeMark=3&version=1.0";
+//	            String result = HttpConnection.get(url);
+	            String result = "{\"retcode\": \"200\"}";
+	            JSONObject jsonObject = JSONObject.parseObject(result);
+	            if (jsonObject == null) {							//连接newtonWeb失败
+	            	o.setStatus(RtspResponseStatuses.BAD_REQUEST);	//请求失败
+	            	o.content().writeCharSequence("{\"retcode\": \"215\"}", CharsetUtil.UTF_8);
+	                sendAnswer(ctx, r, o);
+	                closeThisClient();
+	                return;
+				}
+	            String retcode = jsonObject.getString("retcode");
+	            if (!"200".equals(retcode)) {				//如果返回码不是200，则直接返回newton的错误码，关闭连接
+	            	o.setStatus(RtspResponseStatuses.BAD_REQUEST);	//请求失败
+	            	o.content().writeCharSequence(jsonObject.toString(), CharsetUtil.UTF_8);
+	                sendAnswer(ctx, r, o);
+	                closeThisClient();
+	                return;
+				}
+	            ///////////////////////////////
 				
+				long now = System.currentTimeMillis();
+				o.headers().add("filename", now/1000);
 				sendAnswer(ctx, r, o);
-				Executors.newSingleThreadExecutor().execute(new Runnable() {
+				
+				RtspNettyServer.EXECUTOR.execute(new Runnable() {
 					@Override
 					public void run() {
 						OutputStream videoOutputStream = null;
@@ -369,21 +542,43 @@ public class RtspHandler extends HttpFlvHandler
 						int audioPayloadType = mediaSdpInfoMap.containsKey("audio")?mediaSdpInfoMap.get("audio").getRtpPayloadType():0;
 						String audioCodec = mediaSdpInfoMap.containsKey("audio")?mediaSdpInfoMap.get("audio").getCodec():null;
 						try {
+							SimpleDateFormat formatter= new SimpleDateFormat("yyyyMMdd");
+							Date date = new Date(now);
+							String today = formatter.format(date);
 							//H264
 							if ("H264".equals(videoCodec)) {
-								videoOutputStream=new BufferedOutputStream(new FileOutputStream("C:/Users/zhouyinfei/Desktop/" + keyhash + ".h264", true));
+								File file = new File(RtspNettyServer.outputPath + keyhash + "/" + today + "/" + (now/1000) + ".h264");
+								if (!file.getParentFile().exists()) {			//如果目录不存在，则创建
+									file.getParentFile().mkdirs();
+								}
+								videoOutputStream=new BufferedOutputStream(new FileOutputStream(file, true));
 							//H265
 							} else if ("H265".equals(videoCodec)) {
-								videoOutputStream=new BufferedOutputStream(new FileOutputStream("C:/Users/zhouyinfei/Desktop/" + keyhash + ".h265", true));
+								File file = new File(RtspNettyServer.outputPath + keyhash + "/" + today + "/" + (now/1000) + ".h265");
+								if (!file.getParentFile().exists()) {			//如果目录不存在，则创建
+									file.getParentFile().mkdirs();
+								}
+								videoOutputStream=new BufferedOutputStream(new FileOutputStream(file, true));
 							}
 							//AAC
 							if("MPEG4-GENERIC".equals(audioCodec)) {
-								audioOutputStream=new BufferedOutputStream(new FileOutputStream("C:/Users/zhouyinfei/Desktop/" + keyhash + ".aac", true));
+								File file = new File(RtspNettyServer.outputPath + keyhash + "/" + today + "/" + (now/1000) + ".aac");
+								if (!file.getParentFile().exists()) {			//如果目录不存在，则创建
+									file.getParentFile().mkdirs();
+								}
+								audioOutputStream=new BufferedOutputStream(new FileOutputStream(file, true));
 							}
 							
-							RtpHandler.arrayBlockingQueue.clear();
 							while (true) {
-								byte[] take = RtpHandler.arrayBlockingQueue.take();
+								if (isRtspAlive == 0) {			//如果rtsp连接中断，则停止接收udp
+									break;
+								}
+								
+//								byte[] take = rtpQueue.poll(RtspNettyServer.RTP_IDLE_TIME, TimeUnit.SECONDS);
+								byte[] take = RtpHandler.arrayBlockingQueue.poll(RtspNettyServer.RTP_IDLE_TIME, TimeUnit.SECONDS);
+								if (take == null) {
+									break;
+								}
 								RawPacket rawPacket = new RawPacket(take, 0, take.length);
 								
 								//rtp中payloadType必须和SDP中的一致
@@ -410,8 +605,6 @@ public class RtspHandler extends HttpFlvHandler
 										}
 									} 
 								}
-								
-								
 							}
 							
 						} catch (InterruptedException | IOException e) {
@@ -428,31 +621,21 @@ public class RtspHandler extends HttpFlvHandler
 								e.printStackTrace();
 							}
 						}
+						return;
 					}
-				});;
+				});
 				return;
 			}
-        } 
-        else
-        {
+        } else {
             System.out.println("unknown message");
-            o.setStatus(RtspResponseStatuses.NOT_FOUND);
+            o.setStatus(RtspResponseStatuses.METHOD_NOT_ALLOWED);
+            sendAnswer(ctx, r, o);
+            closeThisClient();
+            return;
         }
         sendAnswer(ctx, r, o);
     }
     
-//    private int timestamp = 0;
-//    private int sequence = 0;
-//    private int rtpssrc = 0x13;
-//
-//    private void writeRtpHeader(ByteBuf header, byte bmarker)
-//    {
-//        header.writeByte(0x80);
-//        header.writeByte(96 | (bmarker << 7) );
-//        header.writeShort(this.sequence++);
-//        header.writeInt(this.timestamp);
-//        header.writeInt(this.rtpssrc);
-//    }
 
     private void sendAnswer(ChannelHandlerContext ctx, FullHttpRequest req, FullHttpResponse rep)
     {
@@ -490,7 +673,6 @@ public class RtspHandler extends HttpFlvHandler
             int state = 0;							//状态机，值范围：0、1、2、3、4
             int first = 1;							//是否是第一个起始码
             int cross = 0;							//某个nalu是否跨buffer
-//            int ssrc = RandomUtils.nextInt();		//rtp的ssrc
             rtpUtils = new RtpUtils();
             
             while (-1 != (len = in.read(buffer, 0, buf_size))) {
@@ -671,7 +853,6 @@ public class RtspHandler extends HttpFlvHandler
             int state = 0;							//状态机，值范围：0、1、2、3、4
             int first = 1;							//是否是第一个起始码
             int cross = 0;							//某个nalu是否跨buffer
-//            int ssrc = RandomUtils.nextInt();		//rtp的ssrc
             rtpUtils = new RtpUtils();
             
             while (-1 != (len = in.read(buffer, 0, buf_size))) {
@@ -843,7 +1024,6 @@ public class RtspHandler extends HttpFlvHandler
         try {
 			in = new BufferedInputStream(new FileInputStream(f));
 			int seqNum = 1;							//rtp的seqnum
-//			int ssrc = RandomUtils.nextInt();		//rtp的ssrc
 			int len = 0;							//每次从文件读的实际字节数
 			int aacDataLen = 0;						//aac data长度
 			int sampling = 16000;					//采样率，默认值16000

@@ -48,6 +48,20 @@
       <version>1.0-20190405.175243-382</version>
     </dependency>
     
+    <!-- httpclient -->
+    <dependency>
+        <groupId>org.apache.httpcomponents</groupId>
+        <artifactId>httpclient</artifactId>
+        <version>4.5.6</version>
+    </dependency>
+    
+    <!-- fastjson -->
+    <dependency>
+        <groupId>com.alibaba</groupId>
+        <artifactId>fastjson</artifactId>
+        <version>1.2.47</version>
+    </dependency>
+    
     <!-- logback -->
     <dependency>
 	    <groupId>ch.qos.logback</groupId>

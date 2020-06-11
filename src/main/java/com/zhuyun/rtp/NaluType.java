@@ -1,7 +1,7 @@
 package com.zhuyun.rtp;
 
 /**
- * 
+ * H264µÄNALU type
  * @author zhouyinfei
  *
  */

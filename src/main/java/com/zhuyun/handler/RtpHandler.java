@@ -5,11 +5,17 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.DatagramPacket;
 
+import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.jitsi.service.neomedia.RawPacket;
 
 public class RtpHandler extends SimpleChannelInboundHandler<DatagramPacket>
 {
-
+	//key是ssrc。同一个channel内，audio和video的ssrc不同，但是Queue是同一个
+//	public static Map<String, ArrayBlockingQueue<byte[]>> rtpMap = 
+//						new ConcurrentHashMap<String, ArrayBlockingQueue<byte[]>>(20000);
 	public static ArrayBlockingQueue<byte[]> arrayBlockingQueue = new ArrayBlockingQueue<byte[]>(500000);
 	
     @Override
@@ -19,7 +25,13 @@ public class RtpHandler extends SimpleChannelInboundHandler<DatagramPacket>
     	byte[] dst = new byte[content.readableBytes()];
     	content.readBytes(dst);
     	
-    	boolean offer = arrayBlockingQueue.offer(dst);
+    	arrayBlockingQueue.offer(dst);
+    	
+//    	RawPacket rawPacket = new RawPacket(dst, 0, dst.length);
+//    	ArrayBlockingQueue<byte[]> queue = rtpMap.get(String.valueOf(rawPacket.getSSRC()));
+//    	if (queue != null) {
+//    		queue.offer(dst);
+//		}
     }
 
     @Override

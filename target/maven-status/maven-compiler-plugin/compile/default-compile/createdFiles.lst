@@ -1,3 +1,4 @@
+com\zhuyun\handler\RtspHandler$4.class
 com\zhuyun\utils\Command.class
 com\zhuyun\rtp\SpsInfoStruct.class
 com\zhuyun\rtp\SpsBitStream.class
@@ -8,11 +9,12 @@ com\zhuyun\RtspNettyServer$1.class
 com\zhuyun\handler\RtspHandler$2.class
 com\zhuyun\RtspNettyServer$3.class
 com\zhuyun\rtp\RtpUtils.class
-com\zhuyun\handler\HttpFlvHandler.class
+com\zhuyun\handler\RtspHandler$5.class
 com\zhuyun\handler\RtpHandler.class
-com\zhuyun\session\SessionFactory.class
+com\zhuyun\utils\HttpConnection.class
 com\zhuyun\handler\HeartBeatServerHandler.class
 com\zhuyun\streamhub\StreamFrame.class
+com\zhuyun\utils\HttpConnectionManager.class
 com\zhuyun\handler\RtspHandler$3.class
 com\zhuyun\rtp\NaluType.class
 com\zhuyun\RtspNettyServer$2.class

@@ -5,17 +5,40 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.DatagramPacket;
 
+import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.jitsi.service.neomedia.RawPacket;
+
 public class RtcpHandler extends SimpleChannelInboundHandler<DatagramPacket>
 {
+	public static Map<String, ArrayBlockingQueue<String>> rtcpMap = 
+					new ConcurrentHashMap<String, ArrayBlockingQueue<String>>(20000);
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket msg) throws Exception
     {
-//    	System.out.println("==========rtcp==========");
     	ByteBuf content = msg.content();
     	byte[] dst = new byte[content.readableBytes()];
     	content.readBytes(dst);
-    	
+
+//    	RawPacket rawPacket = new RawPacket(dst, 0, dst.length);
+//    	String rtcpSsrc = null;
+//    	switch (rawPacket.getRTCPPacketType()) {
+//		case 200:						//发送端报告
+//			rtcpSsrc = String.valueOf(rawPacket.getRTCPSSRC());
+//			break;
+//		case 201:						//接收端报告，ssrc比rtp的值少1
+//			rtcpSsrc = String.valueOf(rawPacket.getRTCPSSRC()-1);
+//			break;
+//		default:
+//			break;
+//		}
+//    	ArrayBlockingQueue<String> queue = rtcpMap.get(rtcpSsrc);
+//    	if (queue != null) {
+//    		queue.offer("");
+//		}
     }
 
     @Override

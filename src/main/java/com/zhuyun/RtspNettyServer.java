@@ -40,9 +40,12 @@ public class RtspNettyServer {
     private static Bootstrap udpRtcpstrap = new Bootstrap();
     public static Channel rtpChannel;
     public static Channel rtcpChannel;
-    public static int ALL_IDLE_TIME;						//读和写的超时时间
+    public static int RTSP_IDLE_TIME;						//读和写的超时时间
+    public static int RTCP_IDLE_TIME;	
+    public static int RTP_IDLE_TIME;
     public static ExecutorService EXECUTOR;					//处理的线程池
     public static int WORKER_GROUP;							//worker的线程数
+    public static String NEWTON_URL;
     
     public static int rtpPort = 54000;
     public static int rtspPort = 554;
@@ -52,8 +55,8 @@ public class RtspNettyServer {
     {
     	udpRtpstrap.group(group)
                 .channel(NioDatagramChannel.class)
-                .option(ChannelOption.SO_SNDBUF, 1024*1024*5)
-                .option(ChannelOption.SO_RCVBUF, 1024*1024*5)
+                .option(ChannelOption.SO_SNDBUF, 1024*1024*2)
+                .option(ChannelOption.SO_RCVBUF, 1024*1024*2)
                 .handler(new ChannelInitializer<NioDatagramChannel>() {
                     @Override
                     protected void initChannel(NioDatagramChannel nioDatagramChannel) throws Exception {
@@ -65,6 +68,7 @@ public class RtspNettyServer {
     	udpRtcpstrap.group(group)
 		        .channel(NioDatagramChannel.class)
 		        .option(ChannelOption.SO_SNDBUF, 1024*1024)
+		        .option(ChannelOption.SO_RCVBUF, 1024*1024)
 		        .handler(new ChannelInitializer<NioDatagramChannel>() {
 		            @Override
 		            protected void initChannel(NioDatagramChannel nioDatagramChannel) throws Exception {
@@ -98,9 +102,12 @@ public class RtspNettyServer {
 			rtpPort = Integer.parseInt(properties.getProperty("rtp.port"));
 			rtspPort = Integer.parseInt(properties.getProperty("rtsp.port"));
 			outputPath = properties.getProperty("output.path");
-			ALL_IDLE_TIME = Integer.parseInt(properties.getProperty("all.idle.time"));
+			RTSP_IDLE_TIME = Integer.parseInt(properties.getProperty("rtsp.idle.time"));
+			RTCP_IDLE_TIME = Integer.parseInt(properties.getProperty("rtcp.idle.time"));
+			RTP_IDLE_TIME = Integer.parseInt(properties.getProperty("rtp.idle.time"));
 			EXECUTOR = Executors.newFixedThreadPool(Integer.parseInt(properties.getProperty("executor.threadpool")));
 			WORKER_GROUP = Integer.parseInt(properties.getProperty("worker.group"));
+			NEWTON_URL = properties.getProperty("newton.url");
 		} catch (NumberFormatException | IOException e1) {
 			e1.printStackTrace();
 		}
@@ -125,7 +132,7 @@ public class RtspNettyServer {
                         @Override
                         protected void initChannel(SocketChannel socketChannel) throws Exception {
                             socketChannel.pipeline()
-                            		.addLast(new IdleStateHandler(0, 0, ALL_IDLE_TIME, TimeUnit.SECONDS))//5秒内既没有读，也没有写，则关闭连接
+                            		.addLast(new IdleStateHandler(0, 0, RTSP_IDLE_TIME, TimeUnit.SECONDS))//5秒内既没有读，也没有写，则关闭连接
                                     .addLast(new RtspDecoder())
                                     .addLast(new RtspEncoder())
                                     .addLast(new HttpObjectAggregator(64 * 1024))

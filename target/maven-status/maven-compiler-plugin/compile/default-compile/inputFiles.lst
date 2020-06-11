@@ -1,9 +1,9 @@
 C:\Users\zhouyinfei\Desktop\SVN\dsp\my_newtonGW\trunk\src\watt\rtsp-netty-server\src\main\java\com\zhuyun\handler\HeartBeatServerHandler.java
 C:\Users\zhouyinfei\Desktop\SVN\dsp\my_newtonGW\trunk\src\watt\rtsp-netty-server\src\main\java\com\zhuyun\rtp\SpsInfoStruct.java
+C:\Users\zhouyinfei\Desktop\SVN\dsp\my_newtonGW\trunk\src\watt\rtsp-netty-server\src\main\java\com\zhuyun\utils\HttpConnectionManager.java
 C:\Users\zhouyinfei\Desktop\SVN\dsp\my_newtonGW\trunk\src\watt\rtsp-netty-server\src\main\java\com\zhuyun\handler\RtpHandler.java
 C:\Users\zhouyinfei\Desktop\SVN\dsp\my_newtonGW\trunk\src\watt\rtsp-netty-server\src\main\java\com\zhuyun\handler\RtspHandler.java
-C:\Users\zhouyinfei\Desktop\SVN\dsp\my_newtonGW\trunk\src\watt\rtsp-netty-server\src\main\java\com\zhuyun\session\SessionFactory.java
-C:\Users\zhouyinfei\Desktop\SVN\dsp\my_newtonGW\trunk\src\watt\rtsp-netty-server\src\main\java\com\zhuyun\handler\HttpFlvHandler.java
+C:\Users\zhouyinfei\Desktop\SVN\dsp\my_newtonGW\trunk\src\watt\rtsp-netty-server\src\main\java\com\zhuyun\utils\HttpConnection.java
 C:\Users\zhouyinfei\Desktop\SVN\dsp\my_newtonGW\trunk\src\watt\rtsp-netty-server\src\main\java\com\zhuyun\rtp\RtpUtils.java
 C:\Users\zhouyinfei\Desktop\SVN\dsp\my_newtonGW\trunk\src\watt\rtsp-netty-server\src\main\java\com\zhuyun\rtp\SpsBitStream.java
 C:\Users\zhouyinfei\Desktop\SVN\dsp\my_newtonGW\trunk\src\watt\rtsp-netty-server\src\main\java\com\zhuyun\media\MediaSdpInfo.java
