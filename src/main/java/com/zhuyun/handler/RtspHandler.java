@@ -34,6 +34,8 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang.StringUtils;
@@ -45,6 +47,8 @@ import org.slf4j.LoggerFactory;
 import com.alibaba.fastjson.JSONObject;
 import com.zhuyun.RtspNettyServer;
 import com.zhuyun.media.MediaSdpInfo;
+import com.zhuyun.rtcp.AudioSRRtcp;
+import com.zhuyun.rtcp.VideoSRRtcp;
 import com.zhuyun.rtp.RtpUtils;
 import com.zhuyun.utils.HttpConnection;
 import com.zhuyun.utils.SdpParser;
@@ -58,45 +62,51 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
     private int remoteAudioRtcpPort = 0;					//客户端Audio的RTCP端口
     private int videoSsrc = 0;					//如果是record，则由客户端带上来。如果是play，则由服务器下发下去
     private int audioSsrc = 0;					//如果是record，则由客户端带上来。如果是play，则由服务器下发下去
-    private String strremoteip;								//客户端的IP地址
+    public String strremoteip;								//客户端的IP地址
     private String session;							
-    private InetSocketAddress dstVideoAddr = null;		//Video目的客户端地址
-    private InetSocketAddress dstAudioAddr = null;		//Audio目的客户端地址
+    public InetSocketAddress dstVideoRtpAddr = null;		//Video目的客户端地址
+    public InetSocketAddress dstVideoRtcpAddr = null;		//Video目的客户端地址
+    public InetSocketAddress dstAudioRtpAddr = null;		//Audio目的客户端地址
+    public InetSocketAddress dstAudioRtcpAddr = null;		//Audio目的客户端地址
     private int isRtspAlive = 1;						//rtsp连接是否存在，如果不存在，则停止发送udp
-    private RtpUtils rtpUtils;
     private int fps = 25;								//默认帧率
     private String media = "h265";						//默认媒体类型
     private Map<String, MediaSdpInfo> mediaSdpInfoMap = null;
     private String keyhash = "";
     private Channel chn;								//RTSP channel
-//    private ArrayBlockingQueue<byte[]> rtpQueue;			//存放音视频数据的阻塞队列
-    private ArrayBlockingQueue<String> rtcpQueue;			//存放rtcp的阻塞队列
+    public ArrayBlockingQueue<byte[]> rtpQueue;			//存放音视频数据的阻塞队列
+    public ArrayBlockingQueue<String> rtcpQueue;			//存放rtcp的阻塞队列
+    public boolean isVideoRtpDetected = false;					//是否收到Video的udp探测包
+    public boolean isVideoRtcpDetected = false;				//是否收到Video的udp rtcp探测包
+    private VideoSRRtcp videoSRRtcp;					//视频发送端报告
+    private AudioSRRtcp audioSRRtcp;					//音频发送端报告
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception
     {
         chn = ctx.channel();
         System.out.printf("%s new connection %s\n", chn.id(), Thread.currentThread().getName());
-//        rtpQueue = new ArrayBlockingQueue<byte[]>(1000);
+        rtpQueue = new ArrayBlockingQueue<byte[]>(1000);
         rtcpQueue = new ArrayBlockingQueue<String>(100);
         
         //根据rtcp消息作为心跳，一段时间内未收到rtcp包，则关闭rtsp连接，并停止发送音视频数据。
-//        RtspNettyServer.EXECUTOR.execute(new Runnable() {
-//			@Override
-//			public void run() {
-//				try {
-//					while (true) {
-//						String poll = rtcpQueue.poll(RtspNettyServer.RTCP_IDLE_TIME, TimeUnit.SECONDS);
-//						if (poll == null) {
-//							closeThisClient();
-//							break;
-//						}
-//					}
-//				} catch (InterruptedException e) {
-//					e.printStackTrace();
-//				}
-//			}
-//		});
+        RtspNettyServer.EXECUTOR.execute(new Runnable() {
+			@Override
+			public void run() {
+				try {
+					while (true) {
+						String poll = rtcpQueue.poll(RtspNettyServer.RTCP_IDLE_TIME, TimeUnit.SECONDS);
+						System.out.println("get rtcpQueue length = " + rtcpQueue.size());
+						if (poll == null) {
+							closeThisClient();
+							break;
+						}
+					}
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+			}
+		});
         
     }
     
@@ -130,10 +140,8 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
             keyhash = "";
         }
     
-        System.out.println("close rtp rtcp channel "  + ctx.channel().id().asShortText());
-//        RtpHandler.rtpMap.remove(String.valueOf(videoSsrc));
-//        RtpHandler.rtpMap.remove(String.valueOf(audioSsrc));
-//        RtcpHandler.rtcpMap.remove(String.valueOf(videoSsrc));
+        RtpHandler.rtspHandlerMap.remove(String.valueOf(videoSsrc));
+        RtpHandler.rtspHandlerMap.remove(String.valueOf(audioSsrc));
         
         isRtspAlive = 0;
     }
@@ -200,7 +208,7 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 
         if (r.method() == RtspMethods.OPTIONS) {
         	System.out.println("options");
-            o.headers().add(RtspHeaderValues.PUBLIC, "DESCRIBE, SETUP, PLAY, TEARDOWN, ANNOUNCE, RECORD");
+            o.headers().add(RtspHeaderValues.PUBLIC, "DESCRIBE, SETUP, PLAY, TEARDOWN, ANNOUNCE, RECORD, GET_PARAMETER");
         } else if (r.method() == RtspMethods.DESCRIBE) {
         	System.out.println("describe");
             InetSocketAddress addr = (InetSocketAddress) ctx.channel().localAddress();
@@ -250,17 +258,17 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
                             strremoteip = ((InetSocketAddress) ctx.channel().remoteAddress()).getHostString();
                             
                             videoSsrc = RandomUtils.nextInt();
-//                            //如果在ssrcMap中已存在该ssrc，则重新生成
-//                            if (RtpHandler.rtpMap.containsKey(String.valueOf(videoSsrc))) {		
-//                            	videoSsrc = RandomUtils.nextInt();			
-//							}
-//   						 	RtpHandler.rtpMap.put(String.valueOf(videoSsrc), rtpQueue);
-//                            RtcpHandler.rtcpMap.put(String.valueOf(videoSsrc), rtcpQueue);
+                            //如果在ssrcMap中已存在该ssrc，则重新生成
+                            if (RtpHandler.rtspHandlerMap.containsKey(String.valueOf(videoSsrc))) {		
+                            	videoSsrc = RandomUtils.nextInt();			
+							}
+   						 	RtpHandler.rtspHandlerMap.put(String.valueOf(videoSsrc), this);
                             System.out.println("videoSsrc=" + videoSsrc);
 
-                            if (null == dstVideoAddr)
+                            if (null == dstVideoRtpAddr)
                             {
-                            	dstVideoAddr = new InetSocketAddress(strremoteip, remoteVideoRtpPort);
+                            	dstVideoRtpAddr = new InetSocketAddress(strremoteip, remoteVideoRtpPort);
+                            	dstVideoRtcpAddr = new InetSocketAddress(strremoteip, remoteVideoRtcpPort);
                             }
                             o.headers().add(RtspHeaderNames.TRANSPORT,
                                     r.headers().get(RtspHeaderNames.TRANSPORT)+String.format(";server_port=%d-%d", RtspNettyServer.rtpPort, RtspNettyServer.rtpPort+1)+";ssrc=" + videoSsrc);
@@ -274,16 +282,17 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
                             strremoteip = ((InetSocketAddress) ctx.channel().remoteAddress()).getHostString();
                             
                             audioSsrc = RandomUtils.nextInt();		
-//                            //如果在ssrcMap中已存在该ssrc，则重新生成
-//                            if (RtpHandler.rtpMap.containsKey(String.valueOf(audioSsrc))) {		
-//                            	audioSsrc = RandomUtils.nextInt();			
-//							}
-//   						 	RtpHandler.rtpMap.put(String.valueOf(audioSsrc), rtpQueue);
+                            //如果在ssrcMap中已存在该ssrc，则重新生成
+                            if (RtpHandler.rtspHandlerMap.containsKey(String.valueOf(audioSsrc))) {		
+                            	audioSsrc = RandomUtils.nextInt();			
+							}
+   						 	RtpHandler.rtspHandlerMap.put(String.valueOf(audioSsrc), this);
                             System.out.println("audioSsrc=" + audioSsrc);
 
-                            if (null == dstAudioAddr)
+                            if (null == dstAudioRtpAddr)
                             {
-                            	dstAudioAddr = new InetSocketAddress(strremoteip, remoteAudioRtpPort);
+                            	dstAudioRtpAddr = new InetSocketAddress(strremoteip, remoteAudioRtpPort);
+                            	dstAudioRtcpAddr = new InetSocketAddress(strremoteip, remoteAudioRtcpPort);
                             }
                             o.headers().add(RtspHeaderNames.TRANSPORT,
                                     r.headers().get(RtspHeaderNames.TRANSPORT)+String.format(";server_port=%d-%d", RtspNettyServer.rtpPort, RtspNettyServer.rtpPort+1)+";ssrc=" + audioSsrc);
@@ -313,7 +322,9 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 	                return;
 				}
 			}
-
+            
+            System.out.println("transport request=" + transport + ",channel=" + ctx.channel().id());
+            System.out.println("transport response=" + o.headers().get(RtspHeaderNames.TRANSPORT)+ ",channel=" + ctx.channel().id());
         } else if (r.method() == RtspMethods.PLAY) {
             // send rtp and rtcp to client
             System.out.println("play");
@@ -341,6 +352,14 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 	            		closeThisClient();
 	            		return;
 	    		}
+	            
+	            //如果未收到视频的udp探测包，或者视频的rtcp探测包，则返回错误
+	            if (isVideoRtpDetected == false || isVideoRtcpDetected == false) {
+	            	o.setStatus(RtspResponseStatuses.DESTINATION_UNREACHABLE);	
+            		sendAnswer(ctx, r, o);
+            		closeThisClient();
+            		return;
+				}
 	            
 	            tenantId = uri.parameters().get("tenantId").get(0);
 	            token = uri.parameters().get("token").get(0);
@@ -396,16 +415,19 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 			        }
 			 
 			        sendAnswer(ctx, r, o);
+			        int rtpTimestamp = (int) (System.currentTimeMillis()/1000);	//音视频初始的RTP时间戳
 			        RtspNettyServer.EXECUTOR.execute(new Runnable() {
 						@Override
 						public void run() {
-							playH264(videoFile);
+							playH264(videoFile, rtpTimestamp);
+//							sendVideoSenderReport();			//发送视频的SR报告
 						}
 					});
 			        RtspNettyServer.EXECUTOR.execute(new Runnable() {
 						@Override
 						public void run() {
-							playAac(audioFile);
+							playAac(audioFile, rtpTimestamp);
+//							sendAudioSenderReport();			//发送音频的SR报告
 						}
 					});
 					return;
@@ -430,16 +452,19 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 			        }
 			        
 			        sendAnswer(ctx, r, o);
+			        int rtpTimestamp = (int) (System.currentTimeMillis()/1000);		//音视频初始的RTP时间戳
 			        RtspNettyServer.EXECUTOR.execute(new Runnable() {
 						@Override
 						public void run() {
-							playH265(videoFile);
+							playH265(videoFile, rtpTimestamp);
+//							sendVideoSenderReport();			//发送视频的SR报告
 						}
 					});
 			        RtspNettyServer.EXECUTOR.execute(new Runnable() {
 						@Override
 						public void run() {
-							playAac(audioFile);
+							playAac(audioFile, rtpTimestamp);
+//							sendAudioSenderReport();			//发送音频的SR报告
 						}
 					});
 					return;
@@ -463,7 +488,19 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 				closeThisClient();
 				return;
 			}
-        }  else if (r.method() == RtspMethods.ANNOUNCE) {
+        }  else if (r.method() == RtspMethods.GET_PARAMETER) {
+            System.out.println("get_parameter");
+            
+            //校验session是否存在
+            session = r.headers().get(RtspHeaderNames.SESSION);
+            if (session == null || !session.equals(chn.id().toString())) {						
+            	System.out.println("rtspSession is null or invalid.");
+            	o.setStatus(RtspResponseStatuses.SESSION_NOT_FOUND);	//Session未找到
+                sendAnswer(ctx, r, o);
+				closeThisClient();
+                return;
+			}
+        } else if (r.method() == RtspMethods.ANNOUNCE) {
             System.out.println("announce");
             
             ByteBuf content = r.content();
@@ -574,8 +611,8 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 									break;
 								}
 								
-//								byte[] take = rtpQueue.poll(RtspNettyServer.RTP_IDLE_TIME, TimeUnit.SECONDS);
-								byte[] take = RtpHandler.arrayBlockingQueue.poll(RtspNettyServer.RTP_IDLE_TIME, TimeUnit.SECONDS);
+								byte[] take = rtpQueue.poll(RtspNettyServer.RTP_IDLE_TIME, TimeUnit.SECONDS);
+//								byte[] take = RtpHandler.arrayBlockingQueue.poll(RtspNettyServer.RTP_IDLE_TIME, TimeUnit.SECONDS);
 								if (take == null) {
 									break;
 								}
@@ -659,7 +696,8 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
         }
     }
     
-    public void playH264(File f){
+    public void playH264(File f, int rtpTimestamp){
+    	int time = rtpTimestamp;
 		//播放h264视频文件
         BufferedInputStream in = null;
         try {
@@ -673,7 +711,7 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
             int state = 0;							//状态机，值范围：0、1、2、3、4
             int first = 1;							//是否是第一个起始码
             int cross = 0;							//某个nalu是否跨buffer
-            rtpUtils = new RtpUtils();
+            RtpUtils rtpUtils = new RtpUtils();
             
             while (-1 != (len = in.read(buffer, 0, buf_size))) {
             	if (isRtspAlive == 0) {			//如果rtsp连接中断，则停止发送udp
@@ -699,12 +737,13 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
     								System.arraycopy(firstHalfNalu, 0, nalu, 0, firstHalfNalu.length);
     								System.arraycopy(secondHalfNalu, 0, nalu, firstHalfNalu.length, secondHalfNalu.length);
     								
-    								List<byte[]> rtpList = rtpUtils.naluToRtpPack(nalu, videoSsrc, fps);
+    								List<byte[]> rtpList = rtpUtils.naluToRtpPack(nalu, videoSsrc, fps, time);
     								for (byte[] rptPackage : rtpList) {
-    									ByteBuf byteBuf = Unpooled.directBuffer();
+    									ByteBuf byteBuf = Unpooled.buffer(rptPackage.length);
     									byteBuf.writeBytes(rptPackage);
-    									RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoAddr));
+    									RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoRtpAddr));
     								}
+    								time += (90000/fps);			//rtp时间戳刻度递增
     							}
     							
     							offset += 4;
@@ -718,12 +757,13 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
     								nalu = new byte[naluSize];
     								System.arraycopy(buffer, start, nalu, 0, naluSize);
     								
-    								List<byte[]> rtpList = rtpUtils.naluToRtpPack(nalu, videoSsrc, fps);
+    								List<byte[]> rtpList = rtpUtils.naluToRtpPack(nalu, videoSsrc, fps, time);
     								for (byte[] rptPackage : rtpList) {
-    									ByteBuf byteBuf = Unpooled.directBuffer();
+    									ByteBuf byteBuf = Unpooled.buffer(rptPackage.length);
     									byteBuf.writeBytes(rptPackage);
-    									RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoAddr));
+    									RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoRtpAddr));
     								}
+    								time += (90000/fps);			//rtp时间戳刻度递增
     							}
     							
     							offset += 4;
@@ -747,12 +787,13 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 			            	nalu = new byte[naluSize];
 			            	System.arraycopy(firstHalfNalu, 0, nalu, 0, naluSize);
 							
-							List<byte[]> rtpList = rtpUtils.naluToRtpPack(nalu, videoSsrc, fps);
+							List<byte[]> rtpList = rtpUtils.naluToRtpPack(nalu, videoSsrc, fps, time);
 							for (byte[] rptPackage : rtpList) {
-								ByteBuf byteBuf = Unpooled.directBuffer();
+								ByteBuf byteBuf = Unpooled.buffer(rptPackage.length);
 								byteBuf.writeBytes(rptPackage);
-								RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoAddr));
+								RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoRtpAddr));
 							}
+							time += (90000/fps);			//rtp时间戳刻度递增
 							
 							offset += 3;
 							state = 0;
@@ -770,12 +811,13 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 			            	nalu = new byte[naluSize];
 			            	System.arraycopy(firstHalfNalu, 0, nalu, 0, naluSize);
 							
-							List<byte[]> rtpList = rtpUtils.naluToRtpPack(nalu, videoSsrc, fps);
+							List<byte[]> rtpList = rtpUtils.naluToRtpPack(nalu, videoSsrc, fps, time);
 							for (byte[] rptPackage : rtpList) {
-								ByteBuf byteBuf = Unpooled.directBuffer();
+								ByteBuf byteBuf = Unpooled.buffer(rptPackage.length);
 								byteBuf.writeBytes(rptPackage);
-								RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoAddr));
+								RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoRtpAddr));
 							}
+							time += (90000/fps);			//rtp时间戳刻度递增
 							
 							offset += 2;
 							state = 0;
@@ -791,12 +833,13 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 			            	nalu = new byte[naluSize];
 			            	System.arraycopy(firstHalfNalu, 0, nalu, 0, naluSize);
 							
-							List<byte[]> rtpList = rtpUtils.naluToRtpPack(nalu, videoSsrc, fps);
+							List<byte[]> rtpList = rtpUtils.naluToRtpPack(nalu, videoSsrc, fps, time);
 							for (byte[] rptPackage : rtpList) {
-								ByteBuf byteBuf = Unpooled.directBuffer();
+								ByteBuf byteBuf = Unpooled.buffer(rptPackage.length);
 								byteBuf.writeBytes(rptPackage);
-								RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoAddr));
+								RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoRtpAddr));
 							}
+							time += (90000/fps);			//rtp时间戳刻度递增
 							
 							offset += 1;
 							state = 0;
@@ -839,7 +882,8 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
         }
     }
     
-    public void playH265(File f){
+    public void playH265(File f, int rtpTimestamp){
+    	int time = rtpTimestamp;
 		//播放h265视频文件
         BufferedInputStream in = null;
         try {
@@ -853,7 +897,7 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
             int state = 0;							//状态机，值范围：0、1、2、3、4
             int first = 1;							//是否是第一个起始码
             int cross = 0;							//某个nalu是否跨buffer
-            rtpUtils = new RtpUtils();
+            RtpUtils rtpUtils = new RtpUtils();
             
             while (-1 != (len = in.read(buffer, 0, buf_size))) {
             	if (isRtspAlive == 0) {			//如果rtsp连接中断，则停止发送udp
@@ -879,12 +923,13 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
     								System.arraycopy(firstHalfNalu, 0, nalu, 0, firstHalfNalu.length);
     								System.arraycopy(secondHalfNalu, 0, nalu, firstHalfNalu.length, secondHalfNalu.length);
     								
-    								List<byte[]> rtpList = rtpUtils.naluH265ToRtpPack(nalu, videoSsrc, fps);
+    								List<byte[]> rtpList = rtpUtils.naluH265ToRtpPack(nalu, videoSsrc, fps, time);
     								for (byte[] rptPackage : rtpList) {
-    									ByteBuf byteBuf = Unpooled.directBuffer();
+    									ByteBuf byteBuf = Unpooled.buffer(rptPackage.length);
     									byteBuf.writeBytes(rptPackage);
-    									RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoAddr));
+    									RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoRtpAddr));
     								}
+    								time += (90000/fps);			//rtp时间戳刻度递增
     							}
     							
     							offset += 4;
@@ -898,12 +943,13 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
     								nalu = new byte[naluSize];
     								System.arraycopy(buffer, start, nalu, 0, naluSize);
     								
-    								List<byte[]> rtpList = rtpUtils.naluH265ToRtpPack(nalu, videoSsrc, fps);
+    								List<byte[]> rtpList = rtpUtils.naluH265ToRtpPack(nalu, videoSsrc, fps, time);
     								for (byte[] rptPackage : rtpList) {
-    									ByteBuf byteBuf = Unpooled.directBuffer();
+    									ByteBuf byteBuf = Unpooled.buffer(rptPackage.length);
     									byteBuf.writeBytes(rptPackage);
-    									RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoAddr));
+    									RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoRtpAddr));
     								}
+    								time += (90000/fps);			//rtp时间戳刻度递增
     							}
     							
     							offset += 4;
@@ -927,12 +973,13 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 			            	nalu = new byte[naluSize];
 			            	System.arraycopy(firstHalfNalu, 0, nalu, 0, naluSize);
 							
-							List<byte[]> rtpList = rtpUtils.naluH265ToRtpPack(nalu, videoSsrc, fps);
+							List<byte[]> rtpList = rtpUtils.naluH265ToRtpPack(nalu, videoSsrc, fps, time);
 							for (byte[] rptPackage : rtpList) {
-								ByteBuf byteBuf = Unpooled.directBuffer();
+								ByteBuf byteBuf = Unpooled.buffer(rptPackage.length);
 								byteBuf.writeBytes(rptPackage);
-								RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoAddr));
+								RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoRtpAddr));
 							}
+							time += (90000/fps);			//rtp时间戳刻度递增
 							
 							offset += 3;
 							state = 0;
@@ -950,12 +997,13 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 			            	nalu = new byte[naluSize];
 			            	System.arraycopy(firstHalfNalu, 0, nalu, 0, naluSize);
 							
-							List<byte[]> rtpList = rtpUtils.naluH265ToRtpPack(nalu, videoSsrc, fps);
+							List<byte[]> rtpList = rtpUtils.naluH265ToRtpPack(nalu, videoSsrc, fps, time);
 							for (byte[] rptPackage : rtpList) {
-								ByteBuf byteBuf = Unpooled.directBuffer();
+								ByteBuf byteBuf = Unpooled.buffer(rptPackage.length);
 								byteBuf.writeBytes(rptPackage);
-								RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoAddr));
+								RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoRtpAddr));
 							}
+							time += (90000/fps);			//rtp时间戳刻度递增
 							
 							offset += 2;
 							state = 0;
@@ -971,12 +1019,13 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 			            	nalu = new byte[naluSize];
 			            	System.arraycopy(firstHalfNalu, 0, nalu, 0, naluSize);
 							
-							List<byte[]> rtpList = rtpUtils.naluH265ToRtpPack(nalu, videoSsrc, fps);
+							List<byte[]> rtpList = rtpUtils.naluH265ToRtpPack(nalu, videoSsrc, fps, time);
 							for (byte[] rptPackage : rtpList) {
-								ByteBuf byteBuf = Unpooled.directBuffer();
+								ByteBuf byteBuf = Unpooled.buffer(rptPackage.length);
 								byteBuf.writeBytes(rptPackage);
-								RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoAddr));
+								RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstVideoRtpAddr));
 							}
+							time += (90000/fps);			//rtp时间戳刻度递增
 							
 							offset += 1;
 							state = 0;
@@ -1019,7 +1068,8 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
         }
     }
     
-    public void playAac(File f){
+    public void playAac(File f, int rtpTimestamp){
+    	int time = rtpTimestamp;
     	BufferedInputStream in = null;
         try {
 			in = new BufferedInputStream(new FileInputStream(f));
@@ -1029,7 +1079,7 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 			int sampling = 16000;					//采样率，默认值16000
 			byte[] adtsHeaderBuffer = new byte[7];	//临时存储adts头
 			byte[] aacDataBuffer;	//临时存储aac data
-			rtpUtils = new RtpUtils();
+			RtpUtils rtpUtils = new RtpUtils();
 			
 			int isHeader = 1;						//标志位，表示当前读取的是adts头还是aac data
 			len = in.read(adtsHeaderBuffer, 0, 7);				//刚开始读取adts头
@@ -1048,10 +1098,11 @@ public class RtspHandler extends SimpleChannelInboundHandler<FullHttpRequest>
 				} else {							//aac data，下一个就是adts头
 					aacDataBuffer = new byte[aacDataLen];				
 					len = in.read(aacDataBuffer, 0, aacDataLen);		//读取aac data
-					byte[] rptPackage = rtpUtils.aacToRtpPack(aacDataBuffer, seqNum, audioSsrc);
-					ByteBuf byteBuf = Unpooled.directBuffer();
+					byte[] rptPackage = rtpUtils.aacToRtpPack(aacDataBuffer, seqNum, audioSsrc, time);
+					ByteBuf byteBuf = Unpooled.buffer(rptPackage.length);
 					byteBuf.writeBytes(rptPackage);
-					RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstAudioAddr));
+					RtspNettyServer.rtpChannel.writeAndFlush(new DatagramPacket(byteBuf, this.dstAudioRtpAddr));
+					time += 1024;			//rtp时间戳刻度递增, 音频固定递增1024
 					seqNum ++;
 
 					Thread.sleep(1024*1000/sampling);		//延时发送帧

@@ -206,8 +206,7 @@ public class RtpUtils {
 	}
 	
 	//nalu封装成rtp
-	public List<byte[]> naluToRtpPack(byte[] nalu, int ssrc, int fps){
-		
+	public List<byte[]> naluToRtpPack(byte[] nalu, int ssrc, int fps, int rtpTimestamp){
 		byte[] pcData = nalu;						//两个起始码(00 00 00 01)之间的NALU数据
 		int mtu = 1400;								//最大传输单元
 		int iLen = pcData.length;					//NALU总长度
@@ -250,7 +249,7 @@ public class RtpUtils {
 	            System.arraycopy(pcData, nOffset, dest, 0, mtu);
 	            bb.put(dest);
 	            nOffset += mtu;
-	            byte[] rtpPackage = makeH264Rtp(bb.array(), mark, seqNum, (int)System.currentTimeMillis(), ssrc);
+	            byte[] rtpPackage = makeH264Rtp(bb.array(), mark, seqNum, rtpTimestamp, ssrc);
 	            rtpList.add(rtpPackage);
 	            seqNum ++;
 	        }
@@ -270,7 +269,7 @@ public class RtpUtils {
 	    		intervel = 1000/fps;	
 			}
 	    	
-	    	byte[] rtpPackage = makeH264Rtp(pcData, false, seqNum, (int)System.currentTimeMillis(), ssrc);
+	    	byte[] rtpPackage = makeH264Rtp(pcData, false, seqNum, rtpTimestamp, ssrc);
 	    	rtpList.add(rtpPackage);
 	    	seqNum ++;
 	    }
@@ -284,13 +283,14 @@ public class RtpUtils {
 	}
 	
 	//nalu h265封装成rtp
-	public List<byte[]> naluH265ToRtpPack(byte[] nalu, int ssrc, int fps){
-		
+	public List<byte[]> naluH265ToRtpPack(byte[] nalu, int ssrc, int fps, int rtpTimestamp){
 		byte[] pcData = nalu;						//两个起始码(00 00 00 01)之间的NALU数据
 		int mtu = 1400;								//最大传输单元
 		int iLen = pcData.length;					//NALU总长度
 		ByteBuffer bb = null;					
 		List<byte[]> rtpList = new ArrayList<byte[]>();				//封装后的rtp包集合
+		int seqNum = 0;							//h264 rtp的序列号，play的时候使用
+		int intervel = 40;						//默认发送间隔40ms，帧率1000/40=25 
 		
 		if (iLen > mtu) { //超过MTU						分片封包模式
 	        byte start_flag = (byte) 0x80;
@@ -329,7 +329,7 @@ public class RtpUtils {
 	            System.arraycopy(pcData, nOffset, dest, 0, mtu);
 	            bb.put(dest);
 	            nOffset += mtu;
-	            byte[] rtpPackage = makeH264Rtp(bb.array(), mark, seqNum, (int)System.currentTimeMillis(), ssrc);
+	            byte[] rtpPackage = makeH264Rtp(bb.array(), mark, seqNum, rtpTimestamp, ssrc);
 	            rtpList.add(rtpPackage);
 	            seqNum ++;
 	        }
@@ -349,7 +349,7 @@ public class RtpUtils {
 	    		intervel = 1000/fps;	
 			}
 	    	
-	    	byte[] rtpPackage = makeH264Rtp(pcData, true, seqNum, (int)System.currentTimeMillis(), ssrc);
+	    	byte[] rtpPackage = makeH264Rtp(pcData, true, seqNum, rtpTimestamp, ssrc);
 	    	rtpList.add(rtpPackage);
 	    	seqNum ++;
 	    }
@@ -363,7 +363,7 @@ public class RtpUtils {
 	}
 	
 	//aac data封装成rtp
-	public byte[] aacToRtpPack(byte[] aacData, int seqNum, int ssrc){
+	public byte[] aacToRtpPack(byte[] aacData, int seqNum, int ssrc, int rtpTimestamp){
 		int aacLen = aacData.length;
 		ByteBuffer bb = ByteBuffer.allocate(aacData.length + 4);
 		bb.put((byte) 0x00);
@@ -372,7 +372,7 @@ public class RtpUtils {
 		bb.put((byte) ((aacLen&0x1F)<<3));							//取长度的低5位
 		bb.put(aacData);
 		
-		return makeAacRtp(bb.array(), true, seqNum, (int)System.currentTimeMillis(), ssrc);
+		return makeAacRtp(bb.array(), true, seqNum, rtpTimestamp, ssrc);
 	}
 	
 	public byte[] makeH264Rtp(byte[] pcData, boolean mark, int seqNum, int timestamp, int ssrc){

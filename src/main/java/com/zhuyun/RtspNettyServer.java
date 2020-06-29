@@ -24,6 +24,9 @@ import java.io.IOException;
 import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import com.zhuyun.handler.HeartBeatServerHandler;
@@ -45,6 +48,8 @@ public class RtspNettyServer {
     public static int RTP_IDLE_TIME;
     public static ExecutorService EXECUTOR;					//处理的线程池
     public static int WORKER_GROUP;							//worker的线程数
+    public static ExecutorService SCHEDULED_EXECUTOR;		//定时线程，用来定时发送RTCP包
+    public static int SCHEDULE_RTCP_SR_TIME;				//定时发送RTCP SR的间隔时间	
     public static String NEWTON_URL;
     
     public static int rtpPort = 54000;
@@ -97,7 +102,8 @@ public class RtspNettyServer {
     	try {
 			Properties properties = new Properties();
 			BufferedReader bufferedReader = new BufferedReader(new FileReader(
-					"C:/Users/zhouyinfei/Desktop/SVN/dsp/my_newtonGW/trunk/src/watt/rtsp-netty-server/src/main/resources/rtsp-server.properties"));
+//					"C:/Users/zhouyinfei/Desktop/SVN/dsp/my_newtonGW/trunk/src/watt/rtsp-netty-server/src/main/resources/rtsp-server.properties"));
+					"/home/zhou/rtsp-netty-server/rtsp-server.properties"));
 			properties.load(bufferedReader);
 			rtpPort = Integer.parseInt(properties.getProperty("rtp.port"));
 			rtspPort = Integer.parseInt(properties.getProperty("rtsp.port"));
@@ -105,7 +111,9 @@ public class RtspNettyServer {
 			RTSP_IDLE_TIME = Integer.parseInt(properties.getProperty("rtsp.idle.time"));
 			RTCP_IDLE_TIME = Integer.parseInt(properties.getProperty("rtcp.idle.time"));
 			RTP_IDLE_TIME = Integer.parseInt(properties.getProperty("rtp.idle.time"));
-			EXECUTOR = Executors.newFixedThreadPool(Integer.parseInt(properties.getProperty("executor.threadpool")));
+			EXECUTOR = new ThreadPoolExecutor(8, Integer.parseInt(properties.getProperty("executor.threadpool")), 600, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>());
+			SCHEDULED_EXECUTOR = Executors.newScheduledThreadPool(Integer.parseInt(properties.getProperty("schedule.executor")));
+			SCHEDULE_RTCP_SR_TIME = Integer.parseInt(properties.getProperty("schedule.rtcp.sr.time"));
 			WORKER_GROUP = Integer.parseInt(properties.getProperty("worker.group"));
 			NEWTON_URL = properties.getProperty("newton.url");
 		} catch (NumberFormatException | IOException e1) {
