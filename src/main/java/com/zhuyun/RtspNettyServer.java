@@ -29,16 +29,22 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
+import org.jitsi.utils.TimeProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.zhuyun.handler.HeartBeatServerHandler;
 import com.zhuyun.handler.RtcpHandler;
 import com.zhuyun.handler.RtpHandler;
 import com.zhuyun.handler.RtspHandler;
+import com.zhuyun.transform.RetransmissionRequesterDelegate;
 
 /**
  *
  *
  */
 public class RtspNettyServer {
+	public static final Logger log = LoggerFactory.getLogger(RtspNettyServer.class); 
     private static Bootstrap udpRtpstrap = new Bootstrap();
     private static Bootstrap udpRtcpstrap = new Bootstrap();
     public static Channel rtpChannel;
@@ -48,13 +54,14 @@ public class RtspNettyServer {
     public static int RTP_IDLE_TIME;
     public static ExecutorService EXECUTOR;					//处理的线程池
     public static int WORKER_GROUP;							//worker的线程数
-    public static ExecutorService SCHEDULED_EXECUTOR;		//定时线程，用来定时发送RTCP包
+    public static ScheduledExecutorService SCHEDULED_EXECUTOR;		//定时线程，用来定时发送RTCP包
     public static int SCHEDULE_RTCP_SR_TIME;				//定时发送RTCP SR的间隔时间	
     public static String NEWTON_URL;
     
     public static int rtpPort = 54000;
     public static int rtspPort = 554;
     public static String outputPath = null;
+    public static RetransmissionRequesterDelegate retransmissionRequesterDelegate;
     
     public static void initUdp(EventLoopGroup group)
     {
@@ -87,11 +94,11 @@ public class RtspNettyServer {
     {
         try
         {
-            System.out.printf("start udp bind %d \n", port);
+            log.info("start udp bind {} ", port);
             rtpChannel = udpRtpstrap.bind(port).sync().channel();
             rtcpChannel = udpRtcpstrap.bind(port+1).sync().channel();
             
-            System.out.printf("end udp bind %d \n", port);
+            log.info("end udp bind {}", port);
         }
         catch (InterruptedException e)
         {
@@ -111,11 +118,15 @@ public class RtspNettyServer {
 			RTSP_IDLE_TIME = Integer.parseInt(properties.getProperty("rtsp.idle.time"));
 			RTCP_IDLE_TIME = Integer.parseInt(properties.getProperty("rtcp.idle.time"));
 			RTP_IDLE_TIME = Integer.parseInt(properties.getProperty("rtp.idle.time"));
-			EXECUTOR = new ThreadPoolExecutor(8, Integer.parseInt(properties.getProperty("executor.threadpool")), 600, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>());
+			EXECUTOR = new ThreadPoolExecutor(5, Integer.parseInt(properties.getProperty("executor.threadpool")), 600, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>());
 			SCHEDULED_EXECUTOR = Executors.newScheduledThreadPool(Integer.parseInt(properties.getProperty("schedule.executor")));
-			SCHEDULE_RTCP_SR_TIME = Integer.parseInt(properties.getProperty("schedule.rtcp.sr.time"));
+			SCHEDULE_RTCP_SR_TIME = Integer.parseInt(properties.getProperty("schedule.rtcp.time"));
 			WORKER_GROUP = Integer.parseInt(properties.getProperty("worker.group"));
 			NEWTON_URL = properties.getProperty("newton.url");
+			
+			//定时重传NACK
+			retransmissionRequesterDelegate = new RetransmissionRequesterDelegate(null, new TimeProvider());
+			SCHEDULED_EXECUTOR.scheduleWithFixedDelay(retransmissionRequesterDelegate, 250, 250, TimeUnit.MILLISECONDS);
 		} catch (NumberFormatException | IOException e1) {
 			e1.printStackTrace();
 		}
@@ -126,7 +137,7 @@ public class RtspNettyServer {
         EventLoopGroup workGrp = new NioEventLoopGroup(WORKER_GROUP);
         initUdp(workGrp);
         createUdp(rtpPort);
-
+        
         try {
             ServerBootstrap rtspstrap = new ServerBootstrap();
             rtspstrap.group(listenGrp, workGrp)
@@ -152,7 +163,7 @@ public class RtspNettyServer {
 
             ChannelFuture rtspFuture = rtspstrap.bind(rtspPort).sync();
 
-            System.out.println("Moriturus te saluto!!!");
+            log.info("RtspNettyServer start success ...");
 
             rtspFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {

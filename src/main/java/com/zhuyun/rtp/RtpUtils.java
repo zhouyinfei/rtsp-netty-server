@@ -2,7 +2,10 @@ package com.zhuyun.rtp;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 
 import org.jitsi.service.neomedia.RawPacket;
 import org.slf4j.Logger;
@@ -12,7 +15,7 @@ import org.slf4j.LoggerFactory;
 public class RtpUtils {
 	public static final Logger log = LoggerFactory.getLogger(RtpUtils.class); 
 	private int intervel = 40;						//默认发送间隔40ms，帧率1000/40=25 
-	private int seqNum = 0;							//h264 rtp的序列号，play的时候使用
+	private int seqNum = 1;							//h264 rtp的序列号，play的时候使用
 	
 	//rtp拆包成nalu
 	public static byte[] rtpToNaluPack(RawPacket rtpPacket){
@@ -85,7 +88,7 @@ public class RtpUtils {
 	    	  bb.put(new byte[]{0x0, 0x0, 0x0, 0x1});
 	    	  bb.put(rtpPayload);
 	     } else {
-	    	 log.debug("rtpToNaluPack-----Unsupport nalu type! " + nalu_type);
+	    	 log.debug("rtpToNaluPack-----Unsupport nalu type! {}", nalu_type);
 	     }
 	    
 	    if (bb != null) {
@@ -206,12 +209,13 @@ public class RtpUtils {
 	}
 	
 	//nalu封装成rtp
-	public List<byte[]> naluToRtpPack(byte[] nalu, int ssrc, int fps, int rtpTimestamp){
+	public Map<Integer, byte[]> naluToRtpPack(byte[] nalu, int ssrc, int fps, int rtpTimestamp){
 		byte[] pcData = nalu;						//两个起始码(00 00 00 01)之间的NALU数据
 		int mtu = 1400;								//最大传输单元
 		int iLen = pcData.length;					//NALU总长度
 		ByteBuffer bb = null;					
-		List<byte[]> rtpList = new ArrayList<byte[]>();				//封装后的rtp包集合
+//		List<byte[]> rtpList = new ArrayList<byte[]>();				//封装后的rtp包集合
+		Map<Integer, byte[]> rtpMap = new HashMap<Integer, byte[]>(); 	//封装后的rtp包集合
 		
 		if (iLen > mtu) { //超过MTU						分片封包模式
 	        byte start_flag = (byte) 0x80;
@@ -229,6 +233,9 @@ public class RtpUtils {
 	        boolean mark = false;									//是否是最后一个分片
 	        int nOffset = 1;										//偏移量，跳过第一个字节naluHeader
 	        while (!mark) {
+	        	if (seqNum == 65535) {			//如果超过2个字节的上限，则重置为1
+	        		seqNum = 1;
+				}
 	        	bb = ByteBuffer.allocate(mtu + 2);
 	            if (iLen < nOffset + mtu) {           //是否拆分结束， 最后一个分片
 	            	mtu = iLen - nOffset;
@@ -250,7 +257,8 @@ public class RtpUtils {
 	            bb.put(dest);
 	            nOffset += mtu;
 	            byte[] rtpPackage = makeH264Rtp(bb.array(), mark, seqNum, rtpTimestamp, ssrc);
-	            rtpList.add(rtpPackage);
+//	            rtpList.add(rtpPackage);
+	            rtpMap.put(seqNum, rtpPackage);
 	            seqNum ++;
 	        }
 	    } else {				//单一NAL 单元模式， 不使用组合模式。mark始终为false
@@ -264,13 +272,18 @@ public class RtpUtils {
 //				}
 //			}
 	    	
+	    	if (seqNum == 65535) {			//如果超过2个字节的上限，则重置为1
+        		seqNum = 1;
+			}
+	    	
 	    	//根据rtsp传过来的fps参数
 	    	if (fps != 0) {
 	    		intervel = 1000/fps;	
 			}
 	    	
 	    	byte[] rtpPackage = makeH264Rtp(pcData, false, seqNum, rtpTimestamp, ssrc);
-	    	rtpList.add(rtpPackage);
+//	    	rtpList.add(rtpPackage);
+	    	rtpMap.put(seqNum, rtpPackage);
 	    	seqNum ++;
 	    }
 		
@@ -279,17 +292,19 @@ public class RtpUtils {
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		}
-		return rtpList;
+		return rtpMap;
 	}
 	
 	//nalu h265封装成rtp
-	public List<byte[]> naluH265ToRtpPack(byte[] nalu, int ssrc, int fps, int rtpTimestamp){
+	public Map<Integer, byte[]> naluH265ToRtpPack(byte[] nalu, int ssrc, int fps, int rtpTimestamp){
 		byte[] pcData = nalu;						//两个起始码(00 00 00 01)之间的NALU数据
 		int mtu = 1400;								//最大传输单元
 		int iLen = pcData.length;					//NALU总长度
 		ByteBuffer bb = null;					
-		List<byte[]> rtpList = new ArrayList<byte[]>();				//封装后的rtp包集合
-		int seqNum = 0;							//h264 rtp的序列号，play的时候使用
+		
+//		List<byte[]> rtpList = new ArrayList<byte[]>();				//封装后的rtp包集合
+		Map<Integer, byte[]> rtpMap = new HashMap<Integer, byte[]>(); 	//封装后的rtp包集合
+		int seqNum = 1;							//h264 rtp的序列号，play的时候使用
 		int intervel = 40;						//默认发送间隔40ms，帧率1000/40=25 
 		
 		if (iLen > mtu) { //超过MTU						分片封包模式
@@ -308,6 +323,10 @@ public class RtpUtils {
 	        boolean mark = false;									//是否是最后一个分片
 	        int nOffset = 2;										//偏移量，跳过2个字节naluHeader
 	        while (!mark) {
+	        	if (seqNum == 65535) {			//如果超过2个字节的上限，则重置为1
+	        		seqNum = 1;
+				}
+	        	
 	        	bb = ByteBuffer.allocate(mtu + 3);
 	            if (iLen < nOffset + mtu) {           //是否拆分结束， 最后一个分片
 	            	mtu = iLen - nOffset;
@@ -330,7 +349,8 @@ public class RtpUtils {
 	            bb.put(dest);
 	            nOffset += mtu;
 	            byte[] rtpPackage = makeH264Rtp(bb.array(), mark, seqNum, rtpTimestamp, ssrc);
-	            rtpList.add(rtpPackage);
+//	            rtpList.add(rtpPackage);
+	            rtpMap.put(seqNum, rtpPackage);
 	            seqNum ++;
 	        }
 	    } else {				//单一NAL 单元模式， 不使用组合模式。mark始终为true
@@ -344,13 +364,18 @@ public class RtpUtils {
 //					}
 //				}
 	    	
+	    	if (seqNum == 65535) {			//如果超过2个字节的上限，则重置为1
+        		seqNum = 1;
+			}
+	    	
 	    	//根据rtsp传过来的fps参数
 	    	if (fps != 0) {
 	    		intervel = 1000/fps;	
 			}
 	    	
 	    	byte[] rtpPackage = makeH264Rtp(pcData, true, seqNum, rtpTimestamp, ssrc);
-	    	rtpList.add(rtpPackage);
+//	    	rtpList.add(rtpPackage);
+	    	rtpMap.put(seqNum, rtpPackage);
 	    	seqNum ++;
 	    }
 		
@@ -359,7 +384,7 @@ public class RtpUtils {
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		}
-		return rtpList;
+		return rtpMap;
 	}
 	
 	//aac data封装成rtp

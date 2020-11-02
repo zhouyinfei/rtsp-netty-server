@@ -12,18 +12,20 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.jitsi.service.neomedia.RawPacket;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import com.zhuyun.RtspNettyServer;
 
 public class RtpHandler extends SimpleChannelInboundHandler<DatagramPacket>
 {
+	public static final Logger log = LoggerFactory.getLogger(RtpHandler.class); 
 	//key是ssrc。同一个channel内，audio和video的ssrc不同，但是Queue是同一个
 	public static Map<String, RtspHandler> rtspHandlerMap = 
-						new ConcurrentHashMap<String, RtspHandler>(10000);
+						new ConcurrentHashMap<String, RtspHandler>(5000);
 //		public static ArrayBlockingQueue<byte[]> arrayBlockingQueue = new ArrayBlockingQueue<byte[]>(500000);
 	
     @Override
-    protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket msg) throws Exception
+    protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket msg)
     {
     	ByteBuf content = msg.content();
     	byte[] dst = new byte[content.readableBytes()];
@@ -45,41 +47,36 @@ public class RtpHandler extends SimpleChannelInboundHandler<DatagramPacket>
 //		} else {
 //			arrayBlockingQueue.offer(dst);
 			
+		try {
 			//ssrc校验
-	    	RawPacket rawPacket = new RawPacket(dst, 0, dst.length);
-	    	
-	    	if (!rawPacket.isInvalid()) {
-	    		RtspHandler rtspHandler = rtspHandlerMap.get(String.valueOf(rawPacket.getSSRC()));
-	    		if (rtspHandler != null) {
-		    		rtspHandler.rtpQueue.offer(dst);
+			RawPacket rawPacket = new RawPacket(dst, 0, dst.length);
+			
+			if (!rawPacket.isInvalid()) {
+				RtspHandler rtspHandler = rtspHandlerMap.get(String.valueOf(rawPacket.getSSRC()));
+				if (rtspHandler != null) {
+					rtspHandler.rtpQueue.offer(dst);
 				}
 			} else {					//不是rtp包
-	    		String destIp = msg.sender().getAddress().getHostAddress();
-	    		int destPort = msg.sender().getPort();
-	    		
-	    		byte sign = dst[0];
-	    		int ssrc = ((dst[1]&0xFF)<<24) + ((dst[2]&0xFF)<<16) + ((dst[3]&0xFF)<<8) + (dst[4]&0xFF);
-	    		InetSocketAddress dstAddr = new InetSocketAddress(destIp, destPort);
-	    		RtspHandler rtspHandler2 = rtspHandlerMap.get(String.valueOf(ssrc));
-	    		if (rtspHandler2 != null && destIp.equals(rtspHandler2.strremoteip)) {
+				String destIp = msg.sender().getAddress().getHostAddress();
+				int destPort = msg.sender().getPort();
+				
+				byte sign = dst[0];
+				int ssrc = ((dst[1]&0xFF)<<24) + ((dst[2]&0xFF)<<16) + ((dst[3]&0xFF)<<8) + (dst[4]&0xFF);
+				InetSocketAddress dstAddr = new InetSocketAddress(destIp, destPort);
+				RtspHandler rtspHandler2 = rtspHandlerMap.get(String.valueOf(ssrc));
+				if (rtspHandler2 != null && destIp.equals(rtspHandler2.strremoteip)) {
 					if (sign == 0x0) {				//视频RTP探测
 						rtspHandler2.dstVideoRtpAddr = dstAddr;
 						rtspHandler2.isVideoRtpDetected = true;
 					} else if (sign == 0x1) {		//音频RTP探测
 						rtspHandler2.dstAudioRtpAddr = dstAddr;
-					} else if (sign == 0x2) {		//视频RTCP探测
-						rtspHandler2.dstVideoRtcpAddr = dstAddr;
-						rtspHandler2.isVideoRtcpDetected = true;
-					}
+					} 
 				}
-	    		
+				
 			}
-//		}
-    	
-
-    	
-    	
-    	
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
 
     }
 
@@ -87,14 +84,14 @@ public class RtpHandler extends SimpleChannelInboundHandler<DatagramPacket>
     public void channelActive(ChannelHandlerContext ctx) throws Exception
     {
         super.channelActive(ctx);
-        System.out.println("rtp handler active " + ctx.channel().id().asShortText());
+        log.info("rtp handler active {}", ctx.channel().id().asShortText());
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception
     {
         super.channelInactive(ctx);
-        System.out.println("rtp handler inactive "  + ctx.channel().id().asShortText());
+        log.info("rtp handler inactive {}", ctx.channel().id().asShortText());
     }
     
     private static final char Hex_Char_Arr[] = {'0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'};
@@ -112,8 +109,7 @@ public class RtpHandler extends SimpleChannelInboundHandler<DatagramPacket>
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception
     {
-        System.out.println("exception caught");
-        cause.printStackTrace();
+        log.error("", cause.getMessage());
         ctx.channel().close();
     }
 }
