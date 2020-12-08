@@ -68,6 +68,31 @@
 	    <artifactId>logback-classic</artifactId>
 	    <version>1.2.3</version>
 	</dependency>
+	  
+	  <!-- https://mvnrepository.com/artifact/org.bouncycastle/bcprov-jdk15on -->
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcprov-jdk15on</artifactId>
+      <version>1.54</version>
+    </dependency>
+    <!-- https://mvnrepository.com/artifact/org.bouncycastle/bcpkix-jdk15on -->
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcpkix-jdk15on</artifactId>
+      <version>1.54</version>
+    </dependency>
+    <!-- https://mvnrepository.com/artifact/org.jitsi/bccontrib -->
+    <dependency>
+      <groupId>org.jitsi</groupId>
+      <artifactId>bccontrib</artifactId>
+      <version>1.0</version>
+    </dependency>
+    <!-- https://mvnrepository.com/artifact/org.jetbrains/annotations -->
+    <dependency>
+      <groupId>org.jetbrains</groupId>
+      <artifactId>annotations</artifactId>
+      <version>20.0.0</version>
+    </dependency>
   </dependencies>
 
   <build>
